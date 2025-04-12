@@ -2,6 +2,7 @@
 import os
 import sys
 import logging
+import logging.handlers
 import time
 from . import config
 from .utils import get_text # 导入 get_text
@@ -31,7 +32,13 @@ def setup_global_logger():
     # 文件处理器 (DEBUG level)
     try:
         log_file_path = config.GLOBAL_LOG_FILE_PATH
-        file_handler = logging.FileHandler(log_file_path, encoding='utf-8', mode='a')
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file_path,
+            encoding='utf-8',
+            mode='a',
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=20
+        )
         file_handler.setLevel(logging.DEBUG)
         file_formatter = logging.Formatter('%(asctime)s - %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
         file_handler.setFormatter(file_formatter)
