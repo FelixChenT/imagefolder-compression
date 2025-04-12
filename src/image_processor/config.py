@@ -5,6 +5,8 @@ import os
 SUPPORTED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
 RUN_STATE_DIR = 'run_state' # 相对于运行 main.py 的目录
 GLOBAL_LOG_FILE_PATH = os.path.join(RUN_STATE_DIR, 'compression.log')
+# 新增：建议的并发工作进程数 (0 或 None 表示使用 CPU 核心数)
+DEFAULT_WORKERS = 0
 
 # --- 原格式压缩模式特定配置 ---
 INPLACE_DIR_STATE_FILE_NAME = '.processed_files_original.log'
@@ -13,6 +15,7 @@ INPLACE_DEFAULT_COMPRESSION_QUALITY = 85
 INPLACE_DEFAULT_PNG_OPTIMIZE = True
 INPLACE_LARGE_FILE_THRESHOLD_MB = 15
 INPLACE_LARGE_FILE_COMPRESSION_QUALITY = 75
+
 
 # --- WebP 模式特定配置 ---
 WEBP_DIR_STATE_FILE_NAME = '.processed_files_webp.log'
