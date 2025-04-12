@@ -5,8 +5,8 @@ import os
 SUPPORTED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
 RUN_STATE_DIR = 'run_state' # 相对于运行 main.py 的目录
 GLOBAL_LOG_FILE_PATH = os.path.join(RUN_STATE_DIR, 'compression.log')
-# 新增：建议的并发工作进程数 (0 或 None 表示使用 CPU 核心数)
-DEFAULT_WORKERS = 0
+# 修改：建议的并发工作进程数 (0 表示使用 CPU 核心数 - 1，最少为 1)
+DEFAULT_WORKERS = 3 # 0 表示自动计算
 
 # --- 原格式压缩模式特定配置 ---
 INPLACE_DIR_STATE_FILE_NAME = '.processed_files_original.log'
@@ -24,7 +24,6 @@ WEBP_DEFAULT_QUALITY = 85
 WEBP_DEFAULT_LOSSLESS = False # False 表示默认有损，但PNG/BMP/TIFF会倾向无损
 
 # --- 多语言文本 ---
-# (保持和原文件完全一致的 texts 字典)
 texts = {
     'zh': {
         # --- 通用 & 设置 ---
@@ -40,11 +39,22 @@ texts = {
         "prompt_png_optimize": "是否启用 PNG 优化? (y/n, 默认: {default}): ",
         "prompt_webp_quality": "请输入 WebP 压缩质量/强度 (0-100, 默认: {default}): ",
         "prompt_webp_lossless": "是否强制使用 WebP 无损模式? (y/n, 默认: {default}): ",
+        # 新增: 工作进程数提示
+        "prompt_num_workers": "请输入并发工作进程数 (建议: {suggested}, 0=自动, 默认: {suggested}): ",
         "error_invalid_quality_jpeg": "质量必须在 1 到 95 之间。",
         "error_invalid_quality_webp": "质量必须在 0 到 100 之间。",
         "error_invalid_number": "请输入有效的数字。",
         "error_invalid_yn": "请输入 'y' 或 'n'。",
+        # 新增: 工作进程数错误
+        "error_invalid_worker_count": "请输入一个有效的正整数，或 0 表示自动。",
         "user_interrupt": "用户中断输入。",
+        # 新增: 工作进程计算日志
+        "calculating_workers": "正在计算建议的工作进程数...",
+        "detected_cores": "检测到 {cpu_cores} 个 CPU 核心。",
+        "suggested_workers": "建议使用 {workers} 个工作进程。",
+        "using_workers": "将使用 {workers} 个工作进程。",
+        "error_cpu_count": "无法检测 CPU 核心数，将使用默认值 {fallback}。",
+        "error_cpu_count_unsupported": "CPU 核心数检测不受支持，将使用默认值 {fallback}。",
         "task_start": "="*30 + " 开始执行图片处理任务 (模式: {mode_name}) " + "="*30,
         "target_folder": "目标根目录: {folder}",
         "supported_types": "支持的文件类型: {extensions}",
@@ -86,6 +96,31 @@ texts = {
         "log_load_state_success": "成功从 {path} 加载 {count} 条记录",
         "log_load_state_fail": "加载目录状态文件 {path} 时出错: {error}",
         "log_save_state_fail": "追加记录到目录状态文件 {path} 时出错 (原始文件名: {filename}): {error}",
+        # 新增: Manager 相关日志
+        "manager_start_success": "多进程管理器已启动。",
+        "manager_start_fail": "错误：无法启动多进程管理器: {error}",
+        # 新增: 任务收集相关日志
+        "task_collect_scan": "正在扫描目录并收集任务...",
+        "task_collect_error": "错误：在扫描目录和收集任务时出错: {error}",
+        "task_collect_success": "已收集 {count} 个任务，分布在 {dirs} 个目录中。",
+        "no_tasks_found": "在指定目录及其子目录中未找到需要处理的图片文件。",
+        "task_collect_skip_not_file": "路径在任务收集中不是有效文件：{path}。正在跳过。",
+        # 新增: 任务执行相关日志
+        "submitting_tasks": "正在将 {count} 个任务提交到进程池...",
+        "tasks_submitted": "所有任务已提交，等待结果...",
+        "progress_update": "进度: {done}/{total} 个任务已完成。",
+        "task_timeout": "任务处理超时 ({timeout} 秒): {path}",
+        "task_result_error": "获取任务结果时出错 ({path}): {error}",
+        "task_failed": "处理文件失败: {path}: {details}",
+        "manager_shutdown_error": "关闭管理器时出错: {error}",
+        "finished_processing_loop": "处理循环结束。已处理 {done}/{total} 个任务。",
+        # 新增: 体积计算相关日志
+        "size_reduction_error_zero": "计算体积减少百分比时发生除零错误。",
+        "size_no_decrease": "处理后总体积未减少。",
+        "size_reduction_na_skipped": "仅跳过文件，未处理新文件或遇到错误，体积减少不适用。",
+        "size_reduction_na_other": "有原始体积但未处理/跳过/错误，体积减少不适用。",
+        "size_reduction_na_zero_orig": "原始总体积为零，无法计算体积减少。",
+        "size_reduction_na_no_tasks": "未运行任何任务，体积减少不适用。",
         # --- 原格式压缩模式特定日志 ---
         "compress_skip_processed": "跳过已处理文件 (根据目录状态 {state_file}): {path}",
         "compress_start": "开始原格式压缩处理: {filename}",
@@ -133,6 +168,15 @@ texts = {
         "convert_webp_options_log": "{filename} -> {webp_filename}: WebP 选项 quality={quality}, mode={mode}",
         "convert_lossless": "无损(Lossless)",
         "convert_lossy": "有损(Lossy)",
+        # 新增: WebP 转换相关日志
+        "core_convert_p_to_rgba": "正在将 P 模式图像 {path} 转换为 RGBA 以便保存为 WebP",
+        "core_convert_p_to_rgb": "正在将 P 模式图像 {path} 转换为 RGB 以便保存为 WebP",
+        "core_convert_p_fail": "无法转换 P 模式图像 {path} 以便保存为 WebP: {error}",
+        "core_convert_la_to_rgba": "正在将 LA 模式图像 {path} 转换为 RGBA 以便保存为 WebP",
+        "core_convert_other_to_rgb": "正在将 {mode} 模式图像 {path} 转换为 RGB 以便保存为 WebP",
+        "core_convert_other_fail": "无法将 {mode} 模式图像 {path} 转换为 RGB 以便保存为 WebP: {error}",
+        "core_overwrite_webp_warn": "目标 WebP 文件已存在，将尝试覆盖: {path}",
+        "core_overwrite_webp_fail": "无法删除已存在的目标 WebP 文件: {path}: {error}",
         "convert_save_temp_success": "图片成功转换为 WebP 并保存到临时文件: {path}",
         "convert_temp_invalid": "WebP 转换结果无效（临时文件不存在或为空），原图 {filename} 不会被删除。",
         "convert_temp_invalid_path": "WebP 转换结果无效: {path}，原图 {original_path} 不会被删除。",
@@ -155,6 +199,11 @@ texts = {
         "convert_unexpected_error": "转换文件 {filename} 到 WebP 时发生未预料的严重错误: {error}\n{traceback}",
         "convert_unexpected_error_path": "转换文件 {path} 到 WebP 时发生未预料的严重错误: {error}",
         "convert_unexpected_error_clean_fail": "清理临时文件 {path} 时失败: {error}",
+        # --- Log Utils & State Utils ---
+        "log_fallback_print": "致命错误：无法创建运行状态目录 '{path}': {error}",
+        "log_warning_setup_ondemand": "警告：在显式设置前访问了全局 logger。现在尝试设置。",
+        "log_error_setup_ondemand": "错误：按需设置 logger 失败。",
+        "state_save_empty_warn": "尝试将空文件名保存到状态文件 {path}",
     },
     'en': {
         # --- General & Setup ---
@@ -170,11 +219,22 @@ texts = {
         "prompt_png_optimize": "Enable PNG optimization? (y/n, default: {default}): ",
         "prompt_webp_quality": "Enter WebP compression quality/strength (0-100, default: {default}): ",
         "prompt_webp_lossless": "Force WebP lossless mode? (y/n, default: {default}): ",
+        # Added: Worker count prompt
+        "prompt_num_workers": "Enter number of concurrent workers (Suggested: {suggested}, 0=Auto, Default: {suggested}): ",
         "error_invalid_quality_jpeg": "Quality must be between 1 and 95.",
         "error_invalid_quality_webp": "Quality must be between 0 and 100.",
         "error_invalid_number": "Please enter a valid number.",
         "error_invalid_yn": "Please enter 'y' or 'n'.",
+        # Added: Worker count error
+        "error_invalid_worker_count": "Please enter a valid positive integer, or 0 for auto.",
         "user_interrupt": "User interrupted input.",
+        # Added: Worker calculation logs
+        "calculating_workers": "Calculating suggested number of workers...",
+        "detected_cores": "Detected {cpu_cores} CPU cores.",
+        "suggested_workers": "Suggesting {workers} worker processes.",
+        "using_workers": "Using {workers} worker processes.",
+        "error_cpu_count": "Could not detect CPU cores, using fallback {fallback}.",
+        "error_cpu_count_unsupported": "CPU core detection not supported, using fallback {fallback}.",
         "task_start": "="*30 + " Starting Image Processing Task (Mode: {mode_name}) " + "="*30,
         "target_folder": "Target root folder: {folder}",
         "supported_types": "Supported file types: {extensions}",
@@ -216,6 +276,31 @@ texts = {
         "log_load_state_success": "Successfully loaded {count} records from {path}",
         "log_load_state_fail": "Error loading directory state file {path}: {error}",
         "log_save_state_fail": "Error appending record to directory state file {path} (Original filename: {filename}): {error}",
+        # Added: Manager related logs
+        "manager_start_success": "Multiprocessing manager started.",
+        "manager_start_fail": "Error: Failed to start multiprocessing manager: {error}",
+        # Added: Task collection related logs
+        "task_collect_scan": "Scanning directories and collecting tasks...",
+        "task_collect_error": "Error: Error during directory scan and task collection: {error}",
+        "task_collect_success": "Collected {count} tasks to process across {dirs} directories.",
+        "no_tasks_found": "No image files found to process in the specified directory and its subdirectories.",
+        "task_collect_skip_not_file": "Path is not a valid file during task collection: {path}. Skipping.",
+        # Added: Task execution related logs
+        "submitting_tasks": "Submitting {count} tasks to the process pool...",
+        "tasks_submitted": "All tasks submitted. Waiting for results...",
+        "progress_update": "Progress: {done}/{total} tasks completed.",
+        "task_timeout": "Task timed out ({timeout} seconds): {path}",
+        "task_result_error": "Error retrieving result for task ({path}): {error}",
+        "task_failed": "Failed to process file: {path}: {details}",
+        "manager_shutdown_error": "Error shutting down manager: {error}",
+        "finished_processing_loop": "Finished processing loop. Handled {done}/{total} tasks.",
+        # Added: Size calculation related logs
+        "size_reduction_error_zero": "Division by zero error during reduction calculation.",
+        "size_no_decrease": "Total output size did not decrease compared to estimated original size.",
+        "size_reduction_na_skipped": "No new files processed or encountered errors (only skipped). Size reduction not applicable.",
+        "size_reduction_na_other": "Original size available but no files were processed, skipped, or errored.",
+        "size_reduction_na_zero_orig": "Total original size is zero. Cannot calculate reduction.",
+        "size_reduction_na_no_tasks": "No tasks were run. Size reduction not applicable.",
          # --- Compress Original Format Mode Specific Logs ---
         "compress_skip_processed": "Skipping already processed file (per directory state {state_file}): {path}",
         "compress_start": "Starting original format compression: {filename}",
@@ -263,6 +348,15 @@ texts = {
         "convert_webp_options_log": "{filename} -> {webp_filename}: WebP options quality={quality}, mode={mode}",
         "convert_lossless": "Lossless",
         "convert_lossy": "Lossy",
+         # Added: WebP conversion related logs
+        "core_convert_p_to_rgba": "Converting P mode image {path} to RGBA for WebP save",
+        "core_convert_p_to_rgb": "Converting P mode image {path} to RGB for WebP save",
+        "core_convert_p_fail": "Could not convert P mode image {path} for WebP save: {error}",
+        "core_convert_la_to_rgba": "Converting LA mode image {path} to RGBA for WebP save",
+        "core_convert_other_to_rgb": "Converting {mode} mode image {path} to RGB for WebP save",
+        "core_convert_other_fail": "Could not convert {mode} mode image {path} to RGB for WebP save: {error}",
+        "core_overwrite_webp_warn": "Target WebP file exists, attempting overwrite: {path}",
+        "core_overwrite_webp_fail": "Failed to remove existing target WebP: {path}: {error}",
         "convert_save_temp_success": "Image successfully converted to WebP and saved to temporary file: {path}",
         "convert_temp_invalid": "WebP conversion result invalid (temp file missing or empty), original file {filename} will not be deleted.",
         "convert_temp_invalid_path": "WebP conversion result invalid: {path}, original file {original_path} will not be deleted.",
@@ -285,5 +379,10 @@ texts = {
         "convert_unexpected_error": "Unexpected critical error converting file {filename} to WebP: {error}\n{traceback}",
         "convert_unexpected_error_path": "Unexpected critical error converting file {path} to WebP: {error}",
         "convert_unexpected_error_clean_fail": "Failed to clean up temporary file {path}: {error}",
+        # --- Log Utils & State Utils ---
+        "log_fallback_print": "Fatal Error: Could not create run state directory '{path}': {error}",
+        "log_warning_setup_ondemand": "Warning: Global logger accessed before explicit setup. Attempting setup now.",
+        "log_error_setup_ondemand": "Error: Failed to setup logger on demand.",
+        "state_save_empty_warn": "Attempted to save empty filename to state file {path}",
     }
 }

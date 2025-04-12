@@ -18,12 +18,20 @@ def load_processed_files_from_dir(logger, state_file_path):
                     if cleaned_line: # 确保只添加非空行
                         processed.add(cleaned_line)
             if logger:
-                # 使用 get_text 获取日志消息
-                logger.debug(get_text("log_load_state_success", path=state_file_path, count=len(processed)))
+                # 使用 get_text 获取日志消息 (假设 logger 存在时 get_text 可用)
+                try:
+                    log_msg = get_text("log_load_state_success", path=state_file_path, count=len(processed))
+                    logger.debug(log_msg)
+                except Exception as text_err:
+                    logger.error(f"Failed to get text for log_load_state_success: {text_err}")
         except Exception as e:
             if logger:
                 # 使用 get_text 获取日志消息
-                logger.error(get_text("log_load_state_fail", path=state_file_path, error=e))
+                try:
+                    log_msg = get_text("log_load_state_fail", path=state_file_path, error=e)
+                    logger.error(log_msg)
+                except Exception as text_err:
+                     logger.error(f"Failed to get text for log_load_state_fail: {text_err}. Original error: {e}")
             else:
                 # Fallback if logger is not available
                 print(f"Error loading state file {state_file_path}: {e}", file=sys.stderr)
@@ -38,7 +46,12 @@ def save_processed_file_to_dir(logger, state_file_path, original_file_name, lock
     """
     if not original_file_name: # 防止写入空行
         if logger:
-            logger.warning(f"Attempted to save empty filename to state file {state_file_path}")
+            # 使用 get_text 记录警告
+            try:
+                warn_msg = get_text("state_save_empty_warn", path=state_file_path)
+                logger.warning(warn_msg)
+            except Exception as text_err:
+                 logger.warning(f"Attempted to save empty filename to state file {state_file_path}. Text error: {text_err}")
         return
 
     try:
@@ -64,8 +77,13 @@ def save_processed_file_to_dir(logger, state_file_path, original_file_name, lock
         # 但如果 logger 存在（例如在主进程中直接调用），则记录错误
         if logger:
             # 使用 get_text 获取日志消息
-            logger.error(get_text("log_save_state_fail", path=state_file_path, filename=original_file_name, error=e))
+            try:
+                err_msg = get_text("log_save_state_fail", path=state_file_path, filename=original_file_name, error=e)
+                logger.error(err_msg)
+            except Exception as text_err:
+                logger.error(f"Failed to get text for log_save_state_fail: {text_err}. Original error saving state for {original_file_name} to {state_file_path}: {e}")
         else:
             # Fallback if logger is not available during direct call
             print(f"Error saving state to {state_file_path} for {original_file_name}: {e}", file=sys.stderr)
-        # 可以在 core 函数的返回值中指示状态保存失败
+        # 抛出异常，以便调用者（如 core 函数）知道状态保存失败
+        raise

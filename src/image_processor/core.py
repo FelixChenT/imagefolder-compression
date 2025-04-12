@@ -26,7 +26,7 @@ def _safe_remove(file_path):
         return False, err_msg
 
 # --- 核心压缩逻辑 (原格式压缩模式) ---
-# 修改：移除 logger，添加 lock，返回包含结果和日志信息的字典
+# 修改：确保所有 log_messages 使用文本 key
 def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
                            dir_log_file_name, quality, png_optimize, lock):
     """
@@ -44,7 +44,6 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
     image_path = os.path.normpath(image_path_raw)
     dir_path = os.path.dirname(image_path)
     file_name = os.path.basename(image_path)
-    # log_messages 存储待记录的日志信息 (level_str, key_or_raw, kwargs, write_to_dir_log_bool, context_kwargs)
     log_messages = []
     result = {
         'status': 'error', # 默认失败
@@ -55,18 +54,15 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
         'original_filename': file_name,
         'file_path': image_path
     }
-    # 定义上下文信息，主要是路径，方便后续添加日志时引用
     context = {'path': image_path, 'dir_path': dir_path}
 
     # 1. 检查是否已处理
     if file_name in processed_in_dir_set:
-        # 确保传递 context
         log_messages.append(('debug', "compress_skip_processed", {'state_file': os.path.basename(dir_state_file), 'path': image_path}, False, context))
         result['status'] = 'skipped'
         return result
 
     # 2. 记录开始处理日志
-    # 确保传递 context
     log_messages.append(('info', "compress_start_path", {'path': image_path}, False, context))
     log_messages.append(('info', "compress_start", {'filename': file_name}, True, context))
 
@@ -76,15 +72,14 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
     try:
         original_size = os.path.getsize(image_path)
         original_size_mb = original_size / (1024 * 1024)
-        # 确保传递 context
-        log_messages.append(('info', "compress_file_size", {'size': original_size_mb}, False, context))
+        log_messages.append(('info', "compress_file_size", {'size': original_size_mb}, False, context)) # 记录 MB 大小到全局日志
+        # 目录日志仍然记录原始文件名和 MB 大小
         log_messages.append(('info', "compress_file_size", {'filename': file_name, 'size': original_size_mb}, True, context))
         result['original_size'] = original_size
     except OSError as e:
-        # 确保传递 context
         log_messages.append(('error', "compress_get_size_fail_path", {'path': image_path, 'error': e}, False, context))
         log_messages.append(('error', "compress_get_size_fail", {'filename': file_name, 'error': e}, True, context))
-        result['error_details'] = f"Cannot get original size: {e}"
+        result['error_details'] = f"Cannot get original size: {e}" # 保持英文错误细节
         return result
 
     # 4. 定义临时文件路径
@@ -96,9 +91,9 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
 
     # 5. 打开、处理、保存到临时文件
     img_to_save = None
+    img = None # 确保 img 在 finally 中可用
     try:
         with Image.open(image_path) as img:
-            # 确保传递 context
             log_messages.append(('debug', "compress_open_success", {'path': image_path}, False, context))
             original_format = img.format
             if not original_format:
@@ -106,13 +101,11 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
                 format_map = {'.jpg': 'JPEG', '.jpeg': 'JPEG', '.png': 'PNG', '.bmp': 'BMP', '.tif': 'TIFF', '.tiff': 'TIFF'}
                 original_format = format_map.get(ext_lower)
                 if not original_format:
-                    # 确保传递 context
                     log_messages.append(('warning', "compress_format_unknown_path", {'path': image_path, 'ext': ext_lower}, False, context))
                     log_messages.append(('warning', "compress_format_unknown", {'filename': file_name, 'ext': ext_lower}, True, context))
                     result['error_details'] = f"Unknown format extension: {ext_lower}"
                     return result
 
-            # 确保传递 context
             log_messages.append(('debug', "compress_format_identified", {'format': original_format, 'path': image_path}, False, context))
 
             save_options = {'format': original_format}
@@ -122,7 +115,6 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
             is_large_file = original_size_mb > config.INPLACE_LARGE_FILE_THRESHOLD_MB
             if original_format == 'JPEG' and is_large_file:
                 current_jpeg_quality = config.INPLACE_LARGE_FILE_COMPRESSION_QUALITY
-                # 确保传递 context
                 log_messages.append(('info', "compress_large_file", {'threshold': config.INPLACE_LARGE_FILE_THRESHOLD_MB, 'quality': current_jpeg_quality}, False, context))
                 log_messages.append(('info', "compress_large_file_log", {'filename': file_name, 'threshold': config.INPLACE_LARGE_FILE_THRESHOLD_MB, 'quality': current_jpeg_quality}, True, context))
 
@@ -133,36 +125,39 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
                 if icc_profile: save_options['icc_profile'] = icc_profile
                 exif = img.info.get('exif')
                 if exif: save_options['exif'] = exif
+                # 检查 RGBA 或带透明度的 P 模式
                 if img.mode in ('RGBA', 'P'):
                      has_transparency = 'transparency' in img.info
                      if img.mode == 'RGBA' or (img.mode == 'P' and has_transparency) :
-                        # 确保传递 context
                         log_messages.append(('debug', "compress_rgba_to_rgb", {'path': image_path}, False, context))
                         log_messages.append(('debug', "compress_rgba_to_rgb_log", {'filename': file_name}, True, context))
                         try:
-                            img_to_save = img.convert('RGB')
+                            # 创建副本进行转换，避免修改原始 img 对象
+                            img_converted = img.convert('RGB')
+                            img_to_save = img_converted # 使用转换后的图像进行保存
                         except Exception as convert_err:
-                             # 确保传递 context
-                             log_messages.append(('warning', f"Could not convert image {image_path} to RGB: {convert_err}", {}, False, context))
-                             img_to_save = img
+                             # 如果转换失败，记录警告，但仍然尝试保存原始图像（可能失败）
+                             log_messages.append(('warning', "compress_rgba_to_rgb_log", {'filename': file_name, 'error': convert_err}, True, context)) # 添加错误信息
+                             # 保持 img_to_save 为原始 img
             elif original_format == 'PNG':
                 save_options['optimize'] = png_optimize
+            # 其他格式（BMP, TIFF）通常没有太多可配置的压缩选项，除了 optimize
+            # Pillow 会根据格式应用合理的默认值
             else:
-                 # 确保传递 context
                  log_messages.append(('debug', "compress_default_save", {'format': original_format, 'path': image_path}, False, context))
 
             img_to_save.save(temp_path, **save_options)
-        # 确保传递 context
+        # 确保 with 语句结束后 img 已关闭
+        img = None # 表示 img 已通过 with 关闭
+
         log_messages.append(('debug', "compress_save_temp_success", {'path': temp_path}, False, context))
 
         # 6. 检查临时文件
         if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
-            # 确保传递 context
             log_messages.append(('error', "compress_temp_invalid_path", {'path': temp_path, 'original_path': image_path}, False, context))
             log_messages.append(('error', "compress_temp_invalid", {'filename': file_name}, True, context))
             result['error_details'] = "Invalid temp file created"
             removed, rm_msg = _safe_remove(temp_path)
-            # 确保传递 context
             if not removed: log_messages.append(('error', "compress_temp_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
             return result
 
@@ -172,13 +167,11 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
         # 7. 删除原图
         removed, rm_msg = _safe_remove(image_path)
         if not removed:
-            # 确保传递 context
             log_messages.append(('error', "compress_remove_original_fail_path", {'path': image_path, 'error': rm_msg, 'temp_path': temp_path}, False, context))
             log_messages.append(('error', "compress_remove_original_fail", {'filename': file_name, 'error': rm_msg, 'temp_filename': os.path.basename(temp_path)}, True, context))
             result['error_details'] = f"Failed to remove original file: {rm_msg}"
             return result
         else:
-            # 确保传递 context
              log_messages.append(('debug', "compress_remove_original_success", {'path': image_path}, False, context))
 
         # 8. 重命名临时文件
@@ -186,11 +179,9 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
             os.rename(temp_path, image_path)
             compressed_size_mb = compressed_size / (1024 * 1024)
             reduction_percent = ((original_size - compressed_size) / original_size) * 100 if original_size > 0 else 0
-            # 确保传递 context
             log_messages.append(('info', "compress_rename_success_path", {'path': image_path, 'orig_mb': original_size_mb, 'comp_mb': compressed_size_mb}, False, context))
             log_messages.append(('info', "compress_rename_success", {'filename': file_name, 'orig_mb': original_size_mb, 'comp_mb': compressed_size_mb, 'percent': reduction_percent}, True, context))
         except OSError as e:
-            # 确保传递 context
             log_messages.append(('critical', "compress_rename_fail_path", {'temp_path': temp_path, 'path': image_path, 'error': e}, False, context))
             log_messages.append(('critical', "compress_rename_fail", {'temp_filename': os.path.basename(temp_path), 'filename': file_name, 'error': e}, True, context))
             result['error_details'] = f"CRITICAL: Failed to rename temp file {temp_path} to {image_path} after deleting original: {e}. MANUAL INTERVENTION NEEDED!"
@@ -200,9 +191,10 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
         try:
             save_processed_file_to_dir(None, dir_state_file, file_name, lock)
         except Exception as state_save_e:
-             # 确保传递 context
              log_messages.append(('error', "log_save_state_fail", {'path': dir_state_file, 'filename': file_name, 'error': state_save_e}, False, context))
              result['error_details'] = f"File processed but failed to save state: {state_save_e}"
+             # 即使状态保存失败，文件本身处理成功了，所以状态设为 success，但带错误信息
+             result['status'] = 'success' # 文件已替换，标记为成功，但错误信息会记录
              return result
 
         result['status'] = 'success'
@@ -210,44 +202,40 @@ def compress_image_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
 
     # --- 异常处理 ---
     except UnidentifiedImageError as e:
-        # 确保传递 context
-        log_messages.append(('error', "compress_unidentified_path", {'path': image_path}, False, context))
-        log_messages.append(('error', "compress_unidentified", {'filename': file_name}, True, context))
+        log_messages.append(('error', "compress_unidentified_path", {'path': image_path, 'error': e}, False, context)) # 添加 error
+        log_messages.append(('error', "compress_unidentified", {'filename': file_name, 'error': e}, True, context)) # 添加 error
         result['error_details'] = f"UnidentifiedImageError: {e}"
         removed, rm_msg = _safe_remove(temp_path)
-        # 确保传递 context
         if not removed: log_messages.append(('warning', "compress_unidentified_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
         return result
     except (IOError, OSError) as e:
-        # 确保传递 context
         log_messages.append(('error', "compress_io_error_path", {'path': image_path, 'error': e}, False, context))
         log_messages.append(('error', "compress_io_error", {'filename': file_name, 'error': e}, True, context))
         result['error_details'] = f"IO/OS Error during processing: {e}"
         removed, rm_msg = _safe_remove(temp_path)
-        # 确保传递 context
-        if not removed: log_messages.append(('error', "compress_unexpected_error_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
+        if not removed: log_messages.append(('error', "compress_unexpected_error_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context)) # 使用正确的 key
         return result
     except Exception as e:
         tb_str = traceback.format_exc()
-        # 确保传递 context
         log_messages.append(('critical', "compress_unexpected_error_path", {'path': image_path, 'error': e}, False, context))
         log_messages.append(('critical', "compress_unexpected_error", {'filename': file_name, 'error': str(e), 'traceback': tb_str}, True, context))
         result['error_details'] = f"Unexpected Error: {e}\n{tb_str}"
         removed, rm_msg = _safe_remove(temp_path)
-        # 确保传递 context
         if not removed: log_messages.append(('error', "compress_unexpected_error_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
         return result
     finally:
-        if 'img' in locals() and hasattr(img, 'close'):
+        # 确保即使在 with 语句内部发生异常，img 也能被关闭（如果它被成功打开）
+        if img and hasattr(img, 'close'):
             try: img.close()
             except Exception: pass
+        # 确保转换后的图像也被关闭
         if img_to_save and hasattr(img_to_save, 'close') and img_to_save is not img:
              try: img_to_save.close()
              except Exception: pass
 
 
 # --- 核心转换逻辑 (WebP 模式 - 原地替换) ---
-# 修改：移除 logger，添加 lock，返回包含结果和日志信息的字典
+# 修改：确保所有 log_messages 使用文本 key
 def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file,
                             dir_log_file_name, quality, use_lossless, lock):
     """
@@ -278,18 +266,15 @@ def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file
         'original_filename': file_name,
         'file_path': image_path
     }
-    # 定义上下文信息
     context = {'path': image_path, 'dir_path': dir_path, 'webp_path': webp_output_path}
 
     # 1. 检查是否已处理
     if file_name in processed_in_dir_set:
-        # 确保传递 context
         log_messages.append(('debug', "convert_skip_processed", {'state_file': os.path.basename(dir_state_file), 'path': image_path}, False, context))
         result['status'] = 'skipped'
         return result
 
     # 2. 记录开始转换日志
-    # 确保传递 context
     log_messages.append(('info', "convert_start_path", {'path': image_path, 'webp_path': webp_output_path}, False, context))
     log_messages.append(('info', "convert_start", {'filename': file_name, 'webp_filename': webp_file_name}, True, context))
 
@@ -299,12 +284,12 @@ def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file
     try:
         original_size = os.path.getsize(image_path)
         original_size_mb = original_size / (1024 * 1024)
-        # 确保传递 context
+        # 全局日志记录 MB 大小
         log_messages.append(('info', "convert_original_size", {'size': original_size_mb}, False, context))
+        # 目录日志记录文件名和 MB 大小
         log_messages.append(('info', "convert_original_size", {'filename': file_name, 'size': original_size_mb}, True, context))
         result['original_size'] = original_size
     except OSError as e:
-        # 确保传递 context
         log_messages.append(('error', "convert_get_size_fail_path", {'path': image_path, 'error': e}, False, context))
         log_messages.append(('error', "convert_get_size_fail", {'filename': file_name, 'error': e}, True, context))
         result['error_details'] = f"Cannot get original size: {e}"
@@ -319,15 +304,16 @@ def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file
 
     # 5. 打开、处理、保存为 WebP 到临时文件
     img_to_save = None
+    img = None # 确保 img 在 finally 中可用
     try:
         with Image.open(image_path) as img:
-            # 确保传递 context
             log_messages.append(('debug', "convert_open_success", {'path': image_path}, False, context))
 
             webp_save_options = {'quality': quality}
 
             original_format_from_ext = os.path.splitext(image_path)[1].lower()
-            original_format_from_img = img.format
+            # Pillow >= 9.1.0 推荐使用 img.format 获取格式
+            original_format_from_img = img.format if hasattr(img, 'format') else None
             lossless_prone_formats = ['PNG', 'BMP', 'TIFF']
             lossless_prone_extensions = ['.png', '.bmp', '.tif', '.tiff']
 
@@ -338,7 +324,7 @@ def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file
             webp_save_options['lossless'] = effective_lossless
             log_lossless_mode_key = "convert_lossless" if effective_lossless else "convert_lossy"
 
-            # 确保传递 context
+            # 使用占位符 [[key]] 让主进程翻译
             log_messages.append(('info', "convert_webp_options", {'quality': quality, 'mode': f'[[{log_lossless_mode_key}]]', 'path': webp_output_path}, False, context))
             log_messages.append(('info', "convert_webp_options_log", {'filename': file_name, 'webp_filename': webp_file_name, 'quality': quality, 'mode': f'[[{log_lossless_mode_key}]]'}, True, context))
 
@@ -347,47 +333,48 @@ def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file
             exif = img.info.get('exif')
             if exif: webp_save_options['exif'] = exif
 
-            img_to_save = img
+            img_to_save = img # 默认使用原始图像
+            converted_img = None # 用于存储转换后的图像
+
+            # WebP 支持 RGB, RGBA。需要转换 P, LA 等模式。
             if img.mode == 'P':
                  try:
-                     # 确保传递 context
-                     log_messages.append(('debug', f"Converting P mode image {image_path} to RGBA for WebP", {}, False, context))
-                     img_to_save = img.convert('RGBA')
+                     log_messages.append(('debug', "core_convert_p_to_rgba", {'path': image_path}, False, context))
+                     converted_img = img.convert('RGBA')
+                     img_to_save = converted_img
                  except Exception:
                      try:
-                         # 确保传递 context
-                         log_messages.append(('debug', f"Converting P mode image {image_path} to RGB for WebP", {}, False, context))
-                         img_to_save = img.convert('RGB')
+                         log_messages.append(('debug', "core_convert_p_to_rgb", {'path': image_path}, False, context))
+                         converted_img = img.convert('RGB')
+                         img_to_save = converted_img
                      except Exception as convert_err:
-                          # 确保传递 context
-                          log_messages.append(('warning', f"Could not convert P mode image {image_path} for WebP: {convert_err}", {}, False, context))
-                          img_to_save = img
+                          log_messages.append(('warning', "core_convert_p_fail", {'path': image_path, 'error': convert_err}, False, context))
+                          # 保持 img_to_save 为原始 img，保存时可能会失败
             elif img.mode == 'LA':
-                 # 确保传递 context
-                 log_messages.append(('debug', f"Converting LA mode image {image_path} to RGBA for WebP", {}, False, context))
-                 img_to_save = img.convert('RGBA')
-            elif img.mode not in ('RGB', 'RGBA'):
+                 log_messages.append(('debug', "core_convert_la_to_rgba", {'path': image_path}, False, context))
+                 converted_img = img.convert('RGBA')
+                 img_to_save = converted_img
+            elif img.mode not in ('RGB', 'RGBA'): # 处理其他可能不支持的模式，如 L, CMYK 等
                  try:
-                     # 确保传递 context
-                     log_messages.append(('debug', f"Converting {img.mode} mode image {image_path} to RGB for WebP", {}, False, context))
-                     img_to_save = img.convert('RGB')
+                     log_messages.append(('debug', "core_convert_other_to_rgb", {'mode': img.mode, 'path': image_path}, False, context))
+                     converted_img = img.convert('RGB')
+                     img_to_save = converted_img
                  except Exception as convert_err:
-                     # 确保传递 context
-                     log_messages.append(('warning', f"Could not convert {img.mode} mode image {image_path} to RGB for WebP: {convert_err}", {}, False, context))
-                     img_to_save = img
+                     log_messages.append(('warning', "core_convert_other_fail", {'mode': img.mode, 'path': image_path, 'error': convert_err}, False, context))
+                     # 保持 img_to_save 为原始 img
 
             img_to_save.save(temp_path, 'WEBP', **webp_save_options)
-        # 确保传递 context
+        # 确保 with 语句结束后 img 已关闭
+        img = None
+
         log_messages.append(('debug', "convert_save_temp_success", {'path': temp_path}, False, context))
 
         # 6. 检查临时 WebP 文件
         if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
-            # 确保传递 context
             log_messages.append(('error', "convert_temp_invalid_path", {'path': temp_path, 'original_path': image_path}, False, context))
             log_messages.append(('error', "convert_temp_invalid", {'filename': file_name}, True, context))
             result['error_details'] = "Invalid temp WebP file created"
             removed, rm_msg = _safe_remove(temp_path)
-            # 确保传递 context
             if not removed: log_messages.append(('error', "convert_temp_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
             return result
 
@@ -397,49 +384,45 @@ def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file
         # 7. 删除原图
         removed, rm_msg = _safe_remove(image_path)
         if not removed:
-            # 确保传递 context
             log_messages.append(('error', "convert_remove_original_fail_path", {'path': image_path, 'error': rm_msg, 'temp_path': temp_path}, False, context))
             log_messages.append(('error', "convert_remove_original_fail", {'filename': file_name, 'error': rm_msg, 'temp_filename': os.path.basename(temp_path)}, True, context))
             result['error_details'] = f"Failed to remove original file: {rm_msg}"
             return result
         else:
-             # 确保传递 context
              log_messages.append(('debug', "convert_remove_original_success", {'path': image_path}, False, context))
 
         # 8. 重命名临时文件为最终的 WebP 文件名
         try:
             if os.path.exists(webp_output_path):
-                 # 确保传递 context
-                 log_messages.append(('warning', f"Target WebP file exists, attempting overwrite: {webp_output_path}", {}, False, context))
+                 log_messages.append(('warning', "core_overwrite_webp_warn", {'path': webp_output_path}, False, context))
                  removed, rm_msg = _safe_remove(webp_output_path)
                  if not removed:
-                      # 确保传递 context
-                      log_messages.append(('error', f"Failed to remove existing target WebP: {webp_output_path}: {rm_msg}", {}, False, context))
-                      log_messages.append(('critical', "convert_rename_fail_path", {'temp_path': temp_path, 'webp_path': webp_output_path, 'error': f"Cannot remove existing file: {rm_msg}"}, False, context))
-                      log_messages.append(('critical', "convert_rename_fail", {'temp_filename': os.path.basename(temp_path), 'webp_filename': webp_file_name, 'error': f"Cannot remove existing file: {rm_msg}"}, True, context))
+                      log_messages.append(('error', "core_overwrite_webp_fail", {'path': webp_output_path, 'error': rm_msg}, False, context))
+                      # 使用已有的重命名失败 key，但提供更具体的错误信息
+                      rename_fail_error = f"Cannot remove existing file: {rm_msg}"
+                      log_messages.append(('critical', "convert_rename_fail_path", {'temp_path': temp_path, 'webp_path': webp_output_path, 'error': rename_fail_error}, False, context))
+                      log_messages.append(('critical', "convert_rename_fail", {'temp_filename': os.path.basename(temp_path), 'webp_filename': webp_file_name, 'error': rename_fail_error}, True, context))
                       result['error_details'] = f"CRITICAL: Cannot remove existing target file {webp_output_path}. Original deleted! Manual intervention needed!"
                       return result
 
             os.rename(temp_path, webp_output_path)
             webp_size_mb = webp_size / (1024 * 1024)
             reduction_percent = ((original_size - webp_size) / original_size) * 100 if original_size > 0 else 0
-            # 确保传递 context
             log_messages.append(('info', "convert_rename_success_path", {'path': image_path, 'webp_path': webp_output_path, 'orig_mb': original_size_mb, 'webp_mb': webp_size_mb}, False, context))
             log_messages.append(('info', "convert_rename_success", {'filename': file_name, 'webp_filename': webp_file_name, 'orig_mb': original_size_mb, 'webp_mb': webp_size_mb, 'percent': reduction_percent}, True, context))
         except OSError as e:
-            # 确保传递 context
             log_messages.append(('critical', "convert_rename_fail_path", {'temp_path': temp_path, 'webp_path': webp_output_path, 'error': e}, False, context))
             log_messages.append(('critical', "convert_rename_fail", {'temp_filename': os.path.basename(temp_path), 'webp_filename': webp_file_name, 'error': e}, True, context))
             result['error_details'] = f"CRITICAL: Failed to rename temp file {temp_path} to {webp_output_path} after deleting original: {e}. MANUAL INTERVENTION NEEDED!"
             return result
 
-        # 9. 记录处理成功状态
+        # 9. 记录处理成功状态 (使用原始文件名记录状态)
         try:
             save_processed_file_to_dir(None, dir_state_file, file_name, lock)
         except Exception as state_save_e:
-             # 确保传递 context
              log_messages.append(('error', "log_save_state_fail", {'path': dir_state_file, 'filename': file_name, 'error': state_save_e}, False, context))
              result['error_details'] = f"File converted but failed to save state: {state_save_e}"
+             result['status'] = 'success' # 文件已转换，标记为成功
              return result
 
         result['status'] = 'success'
@@ -447,46 +430,41 @@ def convert_to_webp_inplace(image_path_raw, processed_in_dir_set, dir_state_file
 
     # --- 异常处理 ---
     except UnidentifiedImageError as e:
-        # 确保传递 context
-        log_messages.append(('error', "convert_unidentified_path", {'path': image_path}, False, context))
-        log_messages.append(('error', "convert_unidentified", {'filename': file_name}, True, context))
+        log_messages.append(('error', "convert_unidentified_path", {'path': image_path, 'error': e}, False, context)) # 添加 error
+        log_messages.append(('error', "convert_unidentified", {'filename': file_name, 'error': e}, True, context)) # 添加 error
         result['error_details'] = f"UnidentifiedImageError: {e}"
         removed, rm_msg = _safe_remove(temp_path)
-        # 确保传递 context
         if not removed: log_messages.append(('warning', "convert_unidentified_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
         return result
     except (IOError, OSError) as e:
-        # 确保传递 context
         log_messages.append(('error', "convert_io_error_path", {'path': image_path, 'error': e}, False, context))
         log_messages.append(('error', "convert_io_error", {'filename': file_name, 'error': e}, True, context))
         result['error_details'] = f"IO/OS Error during conversion: {e}"
         removed, rm_msg = _safe_remove(temp_path)
-        # 确保传递 context
-        if not removed: log_messages.append(('error', "convert_unexpected_error_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
+        if not removed: log_messages.append(('error', "convert_unexpected_error_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context)) # 使用正确的 key
         return result
-    except ValueError as e:
-        # 确保传递 context
+    except ValueError as e: # Pillow 保存 WebP 时可能因模式或选项问题抛出 ValueError
         log_messages.append(('error', "convert_value_error_path", {'webp_path': webp_output_path, 'error': e}, False, context))
         log_messages.append(('error', "convert_value_error", {'webp_filename': webp_file_name, 'error': str(e)}, True, context))
         result['error_details'] = f"ValueError on saving WebP (unsupported mode/options?): {e}"
         removed, rm_msg = _safe_remove(temp_path)
-        # 确保传递 context
         if not removed: log_messages.append(('warning', "convert_value_error_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
         return result
     except Exception as e:
         tb_str = traceback.format_exc()
-        # 确保传递 context
         log_messages.append(('critical', "convert_unexpected_error_path", {'path': image_path, 'error': e}, False, context))
         log_messages.append(('critical', "convert_unexpected_error", {'filename': file_name, 'error': str(e), 'traceback': tb_str}, True, context))
         result['error_details'] = f"Unexpected Error: {e}\n{tb_str}"
         removed, rm_msg = _safe_remove(temp_path)
-        # 确保传递 context
         if not removed: log_messages.append(('error', "convert_unexpected_error_clean_fail", {'path': temp_path, 'error': rm_msg}, False, context))
         return result
     finally:
-        if 'img' in locals() and hasattr(img, 'close'):
+        # 确保原始图像和转换后的图像都被关闭
+        if img and hasattr(img, 'close'):
             try: img.close()
             except Exception: pass
-        if img_to_save and hasattr(img_to_save, 'close') and img_to_save is not img:
-             try: img_to_save.close()
-             except Exception: pass
+        if 'converted_img' in locals() and converted_img and hasattr(converted_img, 'close'):
+            try: converted_img.close()
+            except Exception: pass
+        # 如果 img_to_save 指向 converted_img，它已经被关闭了
+        # 如果 img_to_save 指向原始 img，它也应该被关闭了

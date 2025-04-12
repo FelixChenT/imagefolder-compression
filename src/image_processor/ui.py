@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys
+import os
+import multiprocessing
 from . import config # 相对导入配置
 from .utils import get_text # 相对导入 get_text
 
@@ -24,7 +26,9 @@ def select_language():
                 # 无效选择提示也用默认中文显示
                 print(config.texts['zh']["invalid_choice_language"])
         except (EOFError, KeyboardInterrupt):
-             print(f"\n{config.texts[default_lang_code]['user_interrupt']}", file=sys.stderr) # 使用默认语言提示中断
+             # 使用 get_text 获取中断提示，但需要先设置默认语言，否则可能出错
+             # 假设此时语言尚未设置，使用默认语言的文本
+             print(f"\n{config.texts[default_lang_code]['user_interrupt']}", file=sys.stderr)
              sys.exit(1) # 用户中断，退出程序
 
 def get_processing_mode():
@@ -129,3 +133,48 @@ def get_webp_parameters():
              print(f"\n{get_text('user_interrupt')}", file=sys.stderr)
              sys.exit(1)
     return params
+
+def get_num_workers():
+    """交互式获取用户希望使用的并发工作进程数。返回进程数。"""
+    suggested_workers = config.DEFAULT_WORKERS
+    fallback_workers = 4 # 如果无法检测核心数，使用的备用值
+
+    print(get_text("calculating_workers")) # 使用 get_text
+    try:
+        cpu_cores = os.cpu_count()
+        if cpu_cores:
+            # 建议使用核心数-1，最少为1
+            suggested_workers = max(1, cpu_cores - 1)
+            print(get_text("detected_cores", cpu_cores=cpu_cores)) # 使用 get_text
+            print(get_text("suggested_workers", workers=suggested_workers)) # 使用 get_text
+        else:
+            suggested_workers = fallback_workers # 使用备用值
+            print(get_text("error_cpu_count", fallback=fallback_workers)) # 使用 get_text
+    except NotImplementedError:
+         suggested_workers = fallback_workers # 使用备用值
+         print(get_text("error_cpu_count_unsupported", fallback=fallback_workers)) # 使用 get_text
+
+    while True:
+        try:
+            prompt = get_text("prompt_num_workers", suggested=suggested_workers)
+            workers_input = input(prompt).strip()
+            if workers_input == '':
+                num_workers = suggested_workers # 用户按 Enter，使用建议值
+                break
+            else:
+                num_workers = int(workers_input)
+                if num_workers == 0: # 0 表示自动，也使用建议值
+                    num_workers = suggested_workers
+                    break
+                elif num_workers > 0:
+                    break # 用户输入了有效的正整数
+                else:
+                    print(get_text("error_invalid_worker_count")) # 输入了负数
+        except ValueError:
+            print(get_text("error_invalid_number")) # 输入的不是数字
+        except (EOFError, KeyboardInterrupt):
+             print(f"\n{get_text('user_interrupt')}", file=sys.stderr)
+             sys.exit(1)
+
+    print(get_text("using_workers", workers=num_workers)) # 使用 get_text 确认最终值
+    return num_workers
